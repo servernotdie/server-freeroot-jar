@@ -92,7 +92,6 @@ public class Main{
                 L.info("[*] Work directory not ready yet, will create wrapper later");
                 return;
             }
-
             if(wrapper.exists()){
                 wrapper.delete();
             }
@@ -102,13 +101,11 @@ public class Main{
                     "ROOTFS_DIR=$(pwd)\n"+
                     "export PATH=$PATH:~/.local/usr/bin\n"+
                     "\n"+
-                    "# Check if already installed\n"+
                     "if [ ! -e $ROOTFS_DIR/.installed ]; then\n"+
                     "    echo 'Proot environment not installed yet. Please wait for setup to complete.'\n"+
                     "    exit 1\n"+
                     "fi\n"+
                     "\n"+
-                    "# Display system info\n"+
                     "G=\"\\033[0;32m\"\n"+
                     "Y=\"\\033[0;33m\"\n"+
                     "R=\"\\033[0;31m\"\n"+
@@ -132,12 +129,8 @@ public class Main{
                     "echo -e \"${G}RAM:${X}  ${URAM} / ${TRAM} (${RAM_PERCENT}%)\"\n"+
                     "echo -e \"${Y}Disk:${X} ${UDISK} / ${DISK} (${DISK_PERCENT}%)\"\n"+
                     "echo -e \"${C}IP:${X}   $IP\"\n"+
-                    "echo -e \"${W}___________________________________________________${X}\"\n"+
-                    "echo -e \"           ${C}-----> Mission Completed ! <----${X}\"\n"+
-                    "echo -e \"${W}___________________________________________________${X}\"\n"+
                     "echo \"\"\n"+
                     "\n"+
-                    "# Force hostname to furryisbest inside proot\n"+
                     "echo 'furryisbest' > $ROOTFS_DIR/etc/hostname\n"+
                     "cat > $ROOTFS_DIR/etc/hosts << 'HOSTS_EOF'\n"+
                     "127.0.0.1   localhost\n"+
@@ -147,42 +140,39 @@ public class Main{
                     "ff02::2     ip6-allrouters\n"+
                     "HOSTS_EOF\n"+
                     "\n"+
-                    "# Create enhanced bashrc with hostname and keepalive\n"+
                     "cat > $ROOTFS_DIR/root/.bashrc << 'BASHRC_EOF'\n"+
-                    "# Force hostname\n"+
                     "export HOSTNAME=furryisbest\n"+
+                    "export USER=furry\n"+
+                    "export TERM_PROGRAM=\"bash\"\n"+
                     "export PS1='root@furryisbest:\\w\\$ '\n"+
-                    "\n"+
-                    "# Disable all timeouts\n"+
                     "export LC_ALL=C\n"+
                     "export LANG=C\n"+
                     "export TMOUT=0\n"+
                     "unset TMOUT\n"+
-                    "\n"+
-                    "# Infinite session - prevent auto-logout\n"+
                     "set +o history 2>/dev/null\n"+
                     "PROMPT_COMMAND=''\n"+
-                    "\n"+
-                    "# Standard aliases\n"+
+                    "stty sane 2>/dev/null\n"+
+                    "stty echo 2>/dev/null\n"+
                     "alias ls='ls --color=auto'\n"+
                     "alias ll='ls -lah'\n"+
                     "alias grep='grep --color=auto'\n"+
+                    "alias id='id 2>/dev/null'\n"+
                     "BASHRC_EOF\n"+
                     "\n"+
-                    "# Start aggressive keepalive in background\n"+
                     "(\n"+
                     "  while true; do\n"+
-                    "    sleep 15  # More frequent keepalive\n"+
+                    "    sleep 15\n"+
                     "    echo -ne '\\0' 2>/dev/null || true\n"+
                     "  done\n"+
                     ") &\n"+
                     "KEEPALIVE_PID=$!\n"+
                     "\n"+
-                    "# Cleanup trap\n"+
                     "trap \"kill $KEEPALIVE_PID 2>/dev/null; exit\" EXIT INT TERM\n"+
                     "\n"+
-                    "# Infinite loop to restart proot if it crashes\n"+
+                    "stty sane 2>/dev/null\n"+
+                    "\n"+
                     "while true; do\n"+
+                    "  exec 2>&1\n"+
                     "  $ROOTFS_DIR/usr/local/bin/proot \\\n"+
                     "    --rootfs=\"${ROOTFS_DIR}\" \\\n"+
                     "    -0 \\\n"+
@@ -196,16 +186,13 @@ public class Main{
                     "    /bin/bash --rcfile /root/.bashrc -i\n"+
                     "  \n"+
                     "  EXIT_CODE=$?\n"+
-                    "  # If user typed exit (code 0 or 130), break the loop\n"+
                     "  if [ $EXIT_CODE -eq 0 ] || [ $EXIT_CODE -eq 130 ]; then\n"+
                     "    break\n"+
                     "  fi\n"+
-                    "  # Otherwise, wait and restart (in case of crash)\n"+
                     "  echo 'Session interrupted. Restarting in 2 seconds...'\n"+
                     "  sleep 2\n"+
                     "done\n"+
                     "\n"+
-                    "# Kill keepalive when done\n"+
                     "kill $KEEPALIVE_PID 2>/dev/null\n";
 
             try(FileWriter fw=new FileWriter(wrapper)){
@@ -223,12 +210,18 @@ public class Main{
                 Properties p=new Properties();
                 p.load(is);
                 sshIp=p.getProperty("server-ip","0.0.0.0");
-                sshPort=Integer.parseInt(p.getProperty("server-port","24990"));
+                String portStr=p.getProperty("server-port");
+                if(portStr!=null && !portStr.isEmpty()){
+                    sshPort=Integer.parseInt(portStr);
+                }else{
+                    sshPort=2222;
+                }
                 L.info("[+] Config loaded: "+sshIp+":"+sshPort);
             }catch(Exception e){
                 L.warning("Config error: "+e.getMessage());
             }
         }else{
+            sshPort=2222;
             L.info("[*] No server.properties, using defaults: "+sshIp+":"+sshPort);
         }
     }
