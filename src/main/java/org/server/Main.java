@@ -149,8 +149,12 @@ public class Main{
                     "export LANG=C\n"+
                     "export TMOUT=0\n"+
                     "unset TMOUT\n"+
-                    "set +o history 2>/dev/null\n"+
-                    "PROMPT_COMMAND=''\n"+
+                    "export HISTFILE=/root/.bash_history\n"+
+                    "export HISTSIZE=1000\n"+
+                    "export HISTFILESIZE=2000\n"+
+                    "export HISTTIMEFORMAT='%F %T '\n"+
+                    "shopt -s histappend 2>/dev/null\n"+
+                    "PROMPT_COMMAND='history -a'\n"+
                     "stty sane 2>/dev/null\n"+
                     "stty echo 2>/dev/null\n"+
                     "alias ls='ls --color=auto'\n"+
