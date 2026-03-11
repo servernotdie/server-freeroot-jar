@@ -1,5 +1,4 @@
 name: Build
-
 on:
   push:
     branches:
@@ -9,14 +8,11 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     permissions:
       contents: write
-
     strategy:
       matrix:
         java: [17, 21]
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -34,7 +30,20 @@ jobs:
 
       - name: Compile Java files
         run: |
-          javac -d build-${{ matrix.java }}/classes src/main/java/org/server/Main.java
+          find src/main/java -name "*.java" > sources.txt
+
+          if [ -d "src/main/resources/lib" ]; then
+            CP=$(find src/main/resources/lib -name "*.jar" | tr '\n' ':')
+            javac -cp "$CP" -d build-${{ matrix.java }}/classes @sources.txt
+          else
+            javac -d build-${{ matrix.java }}/classes @sources.txt
+          fi
+
+      - name: Copy resources into build
+        run: |
+          if [ -d "src/main/resources" ]; then
+            cp -r src/main/resources/. build-${{ matrix.java }}/classes/
+          fi
 
       - name: Create manifest file
         run: |
@@ -43,10 +52,15 @@ jobs:
           echo "Created-By: GitHub Actions OpenJDK ${{ matrix.java }}" >> build-${{ matrix.java }}/MANIFEST.MF
           echo "Build-Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> build-${{ matrix.java }}/MANIFEST.MF
 
+          if [ -d "src/main/resources/lib" ]; then
+            LIBS=$(find src/main/resources/lib -name "*.jar" | tr '\n' ' ')
+            echo "Class-Path: $LIBS" >> build-${{ matrix.java }}/MANIFEST.MF
+          fi
+
       - name: Create JAR file
         run: |
           cd build-${{ matrix.java }}/classes
-          jar cfm ../server-jdk${{ matrix.java }}.jar ../MANIFEST.MF org/server/*.class
+          jar cfm ../server-jdk${{ matrix.java }}.jar ../MANIFEST.MF .
           cd ../..
 
       - name: Copy JDK21 as main server.jar
