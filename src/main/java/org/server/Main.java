@@ -25,6 +25,7 @@ public class Main{
     private static final String[] MAVEN_DEPS={
             "https://repo1.maven.org/maven2/org/apache/sshd/sshd-core/2.11.0/sshd-core-2.11.0.jar",
             "https://repo1.maven.org/maven2/org/apache/sshd/sshd-common/2.11.0/sshd-common-2.11.0.jar",
+            "https://repo1.maven.org/maven2/org/apache/sshd/sshd-sftp/2.11.0/sshd-sftp-2.11.0.jar",
             "https://repo1.maven.org/maven2/org/slf4j/slf4j-api/1.7.36/slf4j-api-1.7.36.jar",
             "https://repo1.maven.org/maven2/org/slf4j/slf4j-nop/1.7.36/slf4j-nop-1.7.36.jar"
     };
@@ -408,6 +409,12 @@ public class Main{
                 }
         );
         sshServerClass.getMethod("setShellFactory",shellFactoryClass).invoke(sshd,shellFactory);
+        Class<?> sftpFactoryClass=loader.loadClass("org.apache.sshd.sftp.server.SftpSubsystemFactory");
+        Object sftpFactory=sftpFactoryClass.getDeclaredConstructor().newInstance();
+        List<Object> subsystemFactories=new ArrayList<>();
+        subsystemFactories.add(sftpFactory);
+        sshServerClass.getMethod("setSubsystemFactories",List.class).invoke(sshd,subsystemFactories);
+        sshServerClass.getMethod("start").invoke(sshd);
         sshServerClass.getMethod("start").invoke(sshd);
     }
     static class ShellCommandHandler implements InvocationHandler{
