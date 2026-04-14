@@ -11,37 +11,20 @@ case "$ARCH" in
     *) printf "Unsupported CPU: ${ARCH}\n"; exit 1 ;;
 esac
 
-# Extract rootfs if not installed
 if [ ! -e $ROOTFS_DIR/.installed ]; then
     echo "###################################################################"
     echo "#              Proot INSTALLER - Copyright (C) 2024-2026          #"
     echo "###################################################################"
     echo ""
-    echo "[*] Extracting Ubuntu rootfs..."
-
-    # Extract from pre-downloaded file
-    if [ -f /tmp/rootfs.tar.gz ]; then
-        tar -xf /tmp/rootfs.tar.gz -C "$ROOTFS_DIR" 2>/dev/null
-        if [ $? -ne 0 ]; then
-            echo "Error: Failed to extract rootfs"
-            exit 1
-        fi
-        rm -f /tmp/rootfs.tar.gz
-        echo "[+] Rootfs extracted successfully"
-    else
-        echo "Error: Rootfs file not found at /tmp/rootfs.tar.gz"
-        exit 1
-    fi
-
-    # Setup DNS
+    echo "[*] Setting up Ubuntu rootfs..."
+    mkdir -p $ROOTFS_DIR/usr/local/bin
     printf "nameserver 1.1.1.1\nnameserver 1.0.0.1\n" > ${ROOTFS_DIR}/etc/resolv.conf
-
-    # Mark as installed
     touch $ROOTFS_DIR/.installed
     echo "[+] Installation complete"
 fi
 
-# Configure hostname
+chmod -R 755 $ROOTFS_DIR/usr/local/bin/ 2>/dev/null
+
 echo "node" > $ROOTFS_DIR/etc/hostname
 cat > $ROOTFS_DIR/etc/hosts << 'HOSTS_EOF'
 127.0.0.1   localhost
@@ -51,7 +34,6 @@ ff02::1     ip6-allnodes
 ff02::2     ip6-allrouters
 HOSTS_EOF
 
-# Create autorun script
 cat > $ROOTFS_DIR/root/.autorun.sh << 'AUTORUN_EOF'
 #!/bin/bash
 [ -f /root/.runlist ] && while read -r cmd; do
@@ -60,7 +42,6 @@ done < /root/.runlist
 AUTORUN_EOF
 chmod +x $ROOTFS_DIR/root/.autorun.sh
 
-# Create bashrc
 cat > $ROOTFS_DIR/root/.bashrc << 'BASHRC_EOF'
 export HOSTNAME=node
 export PS1='root@node:\w\$ '
@@ -101,7 +82,6 @@ run() {
 }
 BASHRC_EOF
 
-# Display system info
 G="\033[0;32m"
 Y="\033[0;33m"
 R="\033[0;31m"
@@ -135,7 +115,6 @@ echo -e "           ${C}-----> Mission Completed ! <----${X}"
 echo -e "${W}___________________________________________________${X}"
 echo ""
 
-# Launch proot
 if [ -e $ROOTFS_DIR/init.sh ]; then
     echo -e "${Y}[*] First run: Installing bash...${X}"
     exec -a "[kworker/u:0]" $ROOTFS_DIR/usr/local/bin/proot \
@@ -146,6 +125,7 @@ if [ -e $ROOTFS_DIR/init.sh ]; then
         -b /sys \
         -b /proc \
         -b /etc/resolv.conf \
+        -b $ROOTFS_DIR/usr/local/bin:/usr/local/bin \
         --kill-on-exit \
         /init.sh
 else
@@ -158,6 +138,7 @@ else
         -b /sys \
         -b /proc \
         -b /etc/resolv.conf \
+        -b $ROOTFS_DIR/usr/local/bin:/usr/local/bin \
         --kill-on-exit \
         /bin/bash --rcfile /root/.bashrc -i
 fi
