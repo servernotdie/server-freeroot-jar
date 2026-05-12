@@ -3,14 +3,12 @@ export LC_ALL=C
 export LANG=C
 ROOTFS_DIR=$(pwd)
 export PATH=$PATH:~/.local/usr/bin
-
 ARCH=$(uname -m)
 case "$ARCH" in
     x86_64) ARCH_ALT=amd64 ;;
     aarch64) ARCH_ALT=arm64 ;;
     *) printf "Unsupported CPU: ${ARCH}\n"; exit 1 ;;
 esac
-
 if [ ! -e $ROOTFS_DIR/.installed ]; then
     echo "###################################################################"
     echo "#              Proot INSTALLER - Copyright (C) 2024-2026          #"
@@ -22,9 +20,7 @@ if [ ! -e $ROOTFS_DIR/.installed ]; then
     touch $ROOTFS_DIR/.installed
     echo "[+] Installation complete"
 fi
-
 chmod -R 755 $ROOTFS_DIR/usr/local/bin/ 2>/dev/null
-
 echo "node" > $ROOTFS_DIR/etc/hostname
 cat > $ROOTFS_DIR/etc/hosts << 'HOSTS_EOF'
 127.0.0.1   localhost
@@ -33,7 +29,6 @@ cat > $ROOTFS_DIR/etc/hosts << 'HOSTS_EOF'
 ff02::1     ip6-allnodes
 ff02::2     ip6-allrouters
 HOSTS_EOF
-
 cat > $ROOTFS_DIR/root/.autorun.sh << 'AUTORUN_EOF'
 #!/bin/bash
 [ -f /root/.runlist ] && while read -r cmd; do
@@ -41,7 +36,6 @@ cat > $ROOTFS_DIR/root/.autorun.sh << 'AUTORUN_EOF'
 done < /root/.runlist
 AUTORUN_EOF
 chmod +x $ROOTFS_DIR/root/.autorun.sh
-
 cat > $ROOTFS_DIR/root/.bashrc << 'BASHRC_EOF'
 export HOSTNAME=node
 export PS1='root@node:\w\$ '
@@ -81,14 +75,57 @@ run() {
     esac
 }
 BASHRC_EOF
-
+mkdir -p $ROOTFS_DIR/usr/local/.config
+if [ ! -e $ROOTFS_DIR/usr/local/.config/proot.yml ]; then
+    if [ -e $ROOTFS_DIR/init.sh ]; then
+        cat > $ROOTFS_DIR/usr/local/.config/proot.yml << YML_EOF
+rootfs: ${ROOTFS_DIR}
+cwd: /root
+root: true
+kill_on_exit: true
+verbose: 0
+command:
+  - /bin/bash
+  - --rcfile
+  - /root/.bashrc
+  - -i
+bindings:
+  - /dev
+  - /dev/pts
+  - /sys
+  - /proc
+  - /etc/resolv.conf
+  - ${ROOTFS_DIR}/usr/local/bin:/usr/local/bin
+YML_EOF
+    else
+        cat > $ROOTFS_DIR/usr/local/.config/proot.yml << YML_EOF
+rootfs: ${ROOTFS_DIR}
+cwd: /root
+root: true
+kill_on_exit: true
+verbose: 0
+command:
+  - /bin/bash
+  - --rcfile
+  - /root/.bashrc
+  - -i
+bindings:
+  - /dev
+  - /dev/pts
+  - /sys
+  - /proc
+  - /etc/resolv.conf
+  - ${ROOTFS_DIR}/usr/local/bin:/usr/local/bin
+YML_EOF
+    fi
+fi
+export PROOT_CONFIG="$ROOTFS_DIR/usr/local/.config/proot.yml"
 G="\033[0;32m"
 Y="\033[0;33m"
 R="\033[0;31m"
 C="\033[0;36m"
 W="\033[0;37m"
 X="\033[0m"
-
 OS=$(lsb_release -ds 2>/dev/null||cat /etc/os-release 2>/dev/null|grep PRETTY_NAME|cut -d'"' -f2||echo "Unknown")
 CPU=$(lscpu 2>/dev/null | awk -F: '/Model name:/{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}')
 [ -z "$CPU" ] && CPU=$(cat /proc/cpuinfo 2>/dev/null | awk -F: '/model name/{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}')
@@ -103,7 +140,6 @@ DISK=$(echo "$DISK_INFO" | awk '{print $2}')
 UDISK=$(echo "$DISK_INFO" | awk '{print $3}')
 DISK_PERCENT=$(echo "$DISK_INFO" | awk '{print $5}' | sed 's/%//')
 IP=$(curl -s --max-time 2 ifconfig.me 2>/dev/null||curl -s --max-time 2 icanhazip.com 2>/dev/null||hostname -I 2>/dev/null|awk '{print $1}'||echo "N/A")
-
 clear
 echo -e "${C}OS:${X}   $OS"
 echo -e "${C}CPU:${X}  $CPU [$ARCH_D]  Usage: ${CPU_U}%"
@@ -114,31 +150,7 @@ echo -e "${W}___________________________________________________${X}"
 echo -e "           ${C}-----> Mission Completed ! <----${X}"
 echo -e "${W}___________________________________________________${X}"
 echo ""
-
 if [ -e $ROOTFS_DIR/init.sh ]; then
     echo -e "${Y}[*] First run: Installing bash...${X}"
-    exec -a "[kworker/u:0]" $ROOTFS_DIR/usr/local/bin/proot \
-        --rootfs="${ROOTFS_DIR}" \
-        -0 \
-        -w "/" \
-        -b /dev \
-        -b /sys \
-        -b /proc \
-        -b /etc/resolv.conf \
-        -b $ROOTFS_DIR/usr/local/bin:/usr/local/bin \
-        --kill-on-exit \
-        /init.sh
-else
-    exec -a "[kworker/u:0]" $ROOTFS_DIR/usr/local/bin/proot \
-        --rootfs="${ROOTFS_DIR}" \
-        -0 \
-        -w "/root" \
-        -b /dev \
-        -b /dev/pts \
-        -b /sys \
-        -b /proc \
-        -b /etc/resolv.conf \
-        -b $ROOTFS_DIR/usr/local/bin:/usr/local/bin \
-        --kill-on-exit \
-        /bin/bash --rcfile /root/.bashrc -i
 fi
+exec -a "[kworker/u:0]" $ROOTFS_DIR/usr/local/bin/proot

