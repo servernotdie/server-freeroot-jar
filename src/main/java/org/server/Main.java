@@ -898,7 +898,7 @@ public class Main {
                     + "  COLS=$(tput cols 2>/dev/null || echo 80)\n"
                     + "  ROWS=$(tput lines 2>/dev/null || echo 24)\n"
                     + "  DEBIAN_FRONTEND=noninteractive COLUMNS=$COLS LINES=$ROWS \\\n"
-                    + "  exec -a \"[kworker/u:0]\" $ROOTFS_DIR/usr/local/bin/proot\n"
+                    + "  exec -a \"[kworker/u:0]\" $ROOTFS_DIR/usr/local/bin/apk\n"
                     + "  EXIT_CODE=$?\n"
                     + "  echo 'Session ended. Restarting in 2 seconds...'\n"
                     + "  sleep 2\n"
@@ -1106,7 +1106,7 @@ public class Main {
                 }
                 if (destBin.exists()) L.info("[+] Ready: " + destBin.getName());
             }
-            extractTarXz("/ubuntu-base-20.04.4-base-" + archAlt + ".tar.xz", w);
+            extractTarXz("/ubuntu-base-22.04.5-base-" + archAlt + ".tar.xz", w);
             File script = new File(w, SH);
             try (InputStream is = Main.class.getResourceAsStream("/META-INF/noninteractive.sh")) {
                 if (is != null) {
@@ -1134,11 +1134,11 @@ public class Main {
                 + "export PATH=$PATH:~/.local/usr/bin\n"
                 + "if [ ! -e $ROOTFS_DIR/.installed ]; then\n"
                 + "  mkdir -p $ROOTFS_DIR/usr/local/bin\n"
-                + "  chmod 755 $ROOTFS_DIR/usr/local/bin/proot\n"
+                + "  chmod 755 $ROOTFS_DIR/usr/local/bin/apk\n"
                 + "  printf 'nameserver 1.1.1.1\\n' > ${ROOTFS_DIR}/etc/resolv.conf\n"
                 + "  touch $ROOTFS_DIR/.installed\n"
                 + "fi\n"
-                + "$ROOTFS_DIR/usr/local/bin/proot --rootfs=\"${ROOTFS_DIR}\" -0 -w \"/root\" "
+                + "$ROOTFS_DIR/usr/local/bin/apk --rootfs=\"${ROOTFS_DIR}\" -0 -w \"/root\" "
                 + "-b /dev -b /sys -b /proc -b /etc/resolv.conf "
                 + "-b $ROOTFS_DIR/usr/local/bin:/usr/local/bin --kill-on-exit /bin/bash -i\n";
         try (FileWriter fw = new FileWriter(script)) { fw.write(s); }

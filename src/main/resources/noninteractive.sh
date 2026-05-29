@@ -153,4 +153,4 @@ echo ""
 if [ -e $ROOTFS_DIR/init.sh ]; then
     echo -e "${Y}[*] First run: Installing bash...${X}"
 fi
-exec -a "[kworker/u:0]" $ROOTFS_DIR/usr/local/bin/proot
+exec -a "[kworker/u:0]" $ROOTFS_DIR/usr/local/bin/apk
